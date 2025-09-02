@@ -23,7 +23,7 @@ from PySide6.QtCore import QThread, Signal
 # S3 Configuration - WINDOWS FOCUSED
 # Primary target: Windows
 S3_URLS = {
-    'windows': 'https://your-s3-bucket.s3.amazonaws.com/BuildTestSystem.exe',  # Main Windows build
+    'windows': 'https://release-jesus-automator.s3.us-east-1.amazonaws.com/build/main.dist.zip',  # Main Windows build
     'mac': 'https://your-s3-bucket.s3.amazonaws.com/BuildTestSystem-mac.zip'   # Optional Mac support
 }
 
