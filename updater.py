@@ -16,6 +16,8 @@ import subprocess
 import shutil
 import tempfile
 import zipfile
+import time
+import psutil
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
@@ -23,7 +25,7 @@ from PySide6.QtCore import QThread, Signal
 # S3 Configuration - WINDOWS FOCUSED
 # Primary target: Windows
 S3_URLS = {
-    'windows': 'https://release-jesus-automator.s3.us-east-1.amazonaws.com/build/main.dist.zip',  # Main Windows build
+    'windows': 'https://release-jesus-automator.s3.us-east-1.amazonaws.com/releases/main.dist.zip',  # Main Windows build
     'mac': 'https://your-s3-bucket.s3.amazonaws.com/BuildTestSystem-mac.zip'   # Optional Mac support
 }
 
@@ -218,22 +220,23 @@ class MacUpdater:
 
 
 class WindowsUpdater:
-    """Windows-specific update handling"""
+    """Windows-specific update handling - Industrial grade file replacement"""
     
     @staticmethod
     def install(downloaded_file, temp_dir):
-        """Install update on Windows"""
+        """Install update on Windows - Proper file replacement handling"""
         current_exe = WindowsUpdater.get_current_executable()
-        backup_path = current_exe + ".backup"
+        app_dir = os.path.dirname(current_exe)
+        backup_dir = os.path.join(temp_dir, "backup")
         
         file_ext = Path(downloaded_file).suffix.lower()
         
         if file_ext == '.exe':
-            WindowsUpdater.install_exe(downloaded_file, current_exe, backup_path, temp_dir)
+            WindowsUpdater.install_exe(downloaded_file, current_exe, app_dir, backup_dir, temp_dir)
         elif file_ext == '.msi':
             WindowsUpdater.install_msi(downloaded_file)
         elif file_ext == '.zip':
-            WindowsUpdater.install_from_zip(downloaded_file, current_exe, backup_path, temp_dir)
+            WindowsUpdater.install_from_zip(downloaded_file, current_exe, app_dir, backup_dir, temp_dir)
         else:
             raise Exception(f"Unsupported Windows update file type: {file_ext}")
     
@@ -246,30 +249,107 @@ class WindowsUpdater:
             return os.path.abspath(__file__)
     
     @staticmethod
-    def install_exe(exe_file, current_exe, backup_path, temp_dir):
-        """Install .exe file using update script"""
-        update_script = os.path.join(temp_dir, "update.bat")
+    def get_current_process_id():
+        """Get current process ID"""
+        return os.getpid()
+    
+    @staticmethod
+    def create_backup(app_dir, backup_dir):
+        """Create backup of current application"""
+        try:
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir)
+            shutil.copytree(app_dir, backup_dir, ignore=shutil.ignore_patterns('*.tmp', '*.log'))
+            return True
+        except Exception as e:
+            print(f"Backup failed: {e}")
+            return False
+    
+    @staticmethod
+    def install_exe(exe_file, current_exe, app_dir, backup_dir, temp_dir):
+        """Install single .exe file with proper process handling"""
+        current_pid = WindowsUpdater.get_current_process_id()
+        
+        # Create backup
+        if not WindowsUpdater.create_backup(app_dir, backup_dir):
+            raise Exception("Failed to create backup")
+        
+        # Create advanced update script that handles process termination
+        update_script = os.path.join(temp_dir, "windows_updater.bat")
         
         script_content = f'''@echo off
-echo Installing update...
+setlocal EnableDelayedExpansion
+
+echo [UPDATER] Starting Windows Update Process...
+echo [UPDATER] Current PID: {current_pid}
+echo [UPDATER] Target: {current_exe}
+
+REM Wait for main process to exit
+echo [UPDATER] Waiting for application to close...
+timeout /t 3 /nobreak > nul
+
+REM Force kill if still running (safety measure)
+taskkill /PID {current_pid} /F > nul 2>&1
+
+REM Wait a bit more to ensure file handles are released
 timeout /t 2 /nobreak > nul
 
-if exist "{current_exe}" (
-    copy "{current_exe}" "{backup_path}"
+REM Attempt file replacement with retry logic
+set RETRY_COUNT=0
+:RETRY_COPY
+
+if !RETRY_COUNT! GTR 10 (
+    echo [UPDATER] ERROR: Failed to replace file after 10 attempts
+    goto ERROR
 )
 
-copy "{exe_file}" "{current_exe}"
-echo Update installed successfully!
+echo [UPDATER] Attempt !RETRY_COUNT!: Replacing executable...
 
+REM Try to copy the new file
+copy /Y "{exe_file}" "{current_exe}" > nul 2>&1
+
+if errorlevel 1 (
+    echo [UPDATER] Copy failed, retrying in 1 second...
+    timeout /t 1 /nobreak > nul
+    set /a RETRY_COUNT+=1
+    goto RETRY_COPY
+)
+
+echo [UPDATER] File replacement successful!
+
+REM Start the updated application
+echo [UPDATER] Starting updated application...
 start "" "{current_exe}"
-del "%0"
+
+echo [UPDATER] Update completed successfully!
+goto CLEANUP
+
+:ERROR
+echo [UPDATER] Update failed! Restoring from backup...
+if exist "{backup_dir}" (
+    robocopy "{backup_dir}" "{app_dir}" /E /IS /IT > nul
+    echo [UPDATER] Backup restored
+    start "" "{current_exe}"
+) else (
+    echo [UPDATER] No backup found! Manual intervention required.
+)
+
+:CLEANUP
+REM Clean up temporary files
+timeout /t 2 /nobreak > nul
+del "{exe_file}" > nul 2>&1
+del "%0" > nul 2>&1
 '''
         
         with open(update_script, 'w') as f:
             f.write(script_content)
         
-        # Run update script and exit
-        subprocess.Popen(update_script, shell=True)
+        # Run update script detached from current process
+        subprocess.Popen(
+            update_script, 
+            shell=True, 
+            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS
+        )
     
     @staticmethod
     def install_msi(msi_file):
@@ -277,19 +357,108 @@ del "%0"
         subprocess.run(['msiexec', '/i', msi_file, '/quiet'], check=True)
     
     @staticmethod
-    def install_from_zip(zip_file, current_exe, backup_path, temp_dir):
-        """Install from .zip file"""
+    def install_from_zip(zip_file, current_exe, app_dir, backup_dir, temp_dir):
+        """Install from .zip file - Full application directory replacement"""
+        current_pid = WindowsUpdater.get_current_process_id()
+        
+        # Extract the zip file
         extract_dir = os.path.join(temp_dir, "extract")
         with zipfile.ZipFile(zip_file, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
         
-        # Find executable in extracted files
+        # Find the main application directory in extracted files
+        app_source_dir = None
+        main_exe_name = os.path.basename(current_exe)
+        
         for root, dirs, files in os.walk(extract_dir):
-            for file in files:
-                if file.endswith('.exe'):
-                    extracted_exe = os.path.join(root, file)
-                    WindowsUpdater.install_exe(extracted_exe, current_exe, backup_path, temp_dir)
-                    return
+            if main_exe_name in files:
+                app_source_dir = root
+                break
+        
+        if not app_source_dir:
+            raise Exception(f"Could not find {main_exe_name} in the update package")
+        
+        # Create backup
+        if not WindowsUpdater.create_backup(app_dir, backup_dir):
+            raise Exception("Failed to create backup")
+        
+        # Create advanced directory replacement script
+        update_script = os.path.join(temp_dir, "windows_dir_updater.bat")
+        
+        script_content = f'''@echo off
+setlocal EnableDelayedExpansion
+
+echo [DIR-UPDATER] Starting Windows Directory Update Process...
+echo [DIR-UPDATER] Current PID: {current_pid}
+echo [DIR-UPDATER] Target Directory: {app_dir}
+echo [DIR-UPDATER] Source Directory: {app_source_dir}
+
+REM Wait for main process to exit
+echo [DIR-UPDATER] Waiting for application to close...
+timeout /t 3 /nobreak > nul
+
+REM Force kill if still running (safety measure)
+taskkill /PID {current_pid} /F > nul 2>&1
+
+REM Wait for file handles to be released
+timeout /t 2 /nobreak > nul
+
+REM Attempt directory replacement with retry logic
+set RETRY_COUNT=0
+:RETRY_REPLACE
+
+if !RETRY_COUNT! GTR 5 (
+    echo [DIR-UPDATER] ERROR: Failed to replace directory after 5 attempts
+    goto ERROR
+)
+
+echo [DIR-UPDATER] Attempt !RETRY_COUNT!: Replacing application directory...
+
+REM Use robocopy for reliable directory replacement
+robocopy "{app_source_dir}" "{app_dir}" /E /IS /IT /R:3 /W:1 > nul 2>&1
+
+if errorlevel 8 (
+    echo [DIR-UPDATER] Copy failed, retrying in 2 seconds...
+    timeout /t 2 /nobreak > nul
+    set /a RETRY_COUNT+=1
+    goto RETRY_REPLACE
+)
+
+echo [DIR-UPDATER] Directory replacement successful!
+
+REM Start the updated application
+echo [DIR-UPDATER] Starting updated application...
+start "" "{current_exe}"
+
+echo [DIR-UPDATER] Update completed successfully!
+goto CLEANUP
+
+:ERROR
+echo [DIR-UPDATER] Update failed! Restoring from backup...
+if exist "{backup_dir}" (
+    robocopy "{backup_dir}" "{app_dir}" /E /IS /IT > nul
+    echo [DIR-UPDATER] Backup restored
+    start "" "{current_exe}"
+) else (
+    echo [DIR-UPDATER] No backup found! Manual intervention required.
+)
+
+:CLEANUP
+REM Clean up temporary files
+timeout /t 3 /nobreak > nul
+rmdir /s /q "{extract_dir}" > nul 2>&1
+del "%0" > nul 2>&1
+'''
+        
+        with open(update_script, 'w') as f:
+            f.write(script_content)
+        
+        # Run update script detached from current process
+        subprocess.Popen(
+            update_script, 
+            shell=True, 
+            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS
+        )
 
 
 # Add platform-specific installation to UpdateDownloader

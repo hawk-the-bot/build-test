@@ -36,14 +36,26 @@ pip install -r requirements.txt
 
 ## Running
 
+### Easy Way (Recommended)
+
+**Windows:**
+- Double-click `run_app.bat` (Command Prompt)
+- Or double-click `run_app.ps1` (PowerShell)
+
+### Manual Way
+
 ```bash
 # Activate virtual environment first
 source venv/bin/activate  # Mac/Linux
-# venv\Scripts\activate   # Windows
+venv\Scripts\activate.ps1 # Windows PowerShell
+# OR
+venv\Scripts\activate.bat # Windows Command Prompt
 
 # Run the app
 python main.py
 ```
+
+**Important:** You MUST activate the virtual environment first, or you'll get "No module named 'PySide6'" error.
 
 ## Building (Windows Primary)
 
