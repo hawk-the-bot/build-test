@@ -29,8 +29,22 @@ if exist build rmdir /s /q build
 if exist main.dist rmdir /s /q main.dist
 if exist main.build rmdir /s /q main.build
 
+REM Check MSVC availability and set compiler flags
+echo Checking for Microsoft Visual C++ compiler...
+where cl.exe >nul 2>&1
+if errorlevel 1 (
+    echo WARNING: MSVC compiler not found in PATH
+    echo Using MinGW64 fallback for fast compilation...
+    set COMPILER_FLAGS=--mingw64
+    set COMPILER_NAME=MinGW64
+) else (
+    echo SUCCESS: MSVC compiler found - using optimal MSVC!
+    set COMPILER_FLAGS=--msvc=latest
+    set COMPILER_NAME=MSVC
+)
+
 REM Build with Nuitka - Windows Optimized
-echo Building with Nuitka (Windows Edition)...
+echo Building with Nuitka (Windows Edition) using %COMPILER_NAME%...
 call venv\Scripts\activate
 python -m nuitka ^
     --standalone ^
@@ -42,6 +56,7 @@ python -m nuitka ^
     --windows-file-version=1.0.0.0 ^
     --windows-product-version=1.0.0.0 ^
     --windows-file-description="Windows-focused build test application" ^
+    %COMPILER_FLAGS% ^
     --include-data-file=version.txt=version.txt ^
     --output-filename=BuildTestSystem.exe ^
     --output-dir=build ^
@@ -49,7 +64,7 @@ python -m nuitka ^
 
 REM Check if build was successful
 if %errorlevel% equ 0 (
-    echo Windows build successful!
+    echo Windows build successful using %COMPILER_NAME%!
     echo Primary Windows executable created at: build\BuildTestSystem.exe
     
     REM Create Windows installer structure
