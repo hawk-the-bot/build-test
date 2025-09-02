@@ -60,11 +60,13 @@ build_windows.bat
 ```
 
 **Windows build script features:**
-- Optimized for Windows development
-- Creates Windows-specific executable
-- Handles Windows-specific Nuitka flags
-- Automatic venv setup
-- Windows installer creation
+- **Smart compiler detection**: Auto-detects MSVC vs MinGW64
+- **MSVC optimization**: Uses `--msvc=latest` when available
+- **MinGW64 fallback**: Uses `--mingw64` when MSVC not found
+- **Industrial build process**: Optimized for Windows development
+- **Windows metadata**: Company, product, version information
+- **Automatic venv setup**: Handles virtual environment
+- **Windows installer creation**: Ready-to-deploy package
 
 ## Windows-Focused S3 Update System
 
